@@ -18,13 +18,19 @@ export class MastodonCustomProvider extends MastodonProvider {
   editor = 'normal' as const;
 
   // Accepts what users type ("mastodon.gamedev.place", a profile link...) and
-  // keeps only the https origin of the instance.
+  // keeps only the origin of the instance. It must be a public https url,
+  // unless SSRF protection is disabled for instances on a private network.
   private normalizeInstanceUrl(url: string) {
     const value = (url || '').trim();
     const parsed = new URL(
       /^[a-z]+:\/\//i.test(value) ? value : `https://${value}`
     );
-    if (parsed.protocol !== 'https:' || !parsed.hostname.includes('.')) {
+    const isPublicHttps =
+      parsed.protocol === 'https:' && parsed.hostname.includes('.');
+    const isPrivateAllowed =
+      process.env.DISABLE_SSRF_PROTECTION === 'true' &&
+      ['https:', 'http:'].includes(parsed.protocol);
+    if (!isPublicHttps && !isPrivateAllowed) {
       throw new Error('The instance url must be a public https url');
     }
 
@@ -48,7 +54,9 @@ export class MastodonCustomProvider extends MastodonProvider {
         // @ts-ignore - undici-only option; blocks SSRF to internal IPs
         dispatcher: getSsrfSafeDispatcher(),
       })
-    ).json();
+    )
+      .json()
+      .catch(() => ({}));
 
     if (!client_id || !client_secret) {
       throw new Error('Could not register Postiz on this Mastodon instance');

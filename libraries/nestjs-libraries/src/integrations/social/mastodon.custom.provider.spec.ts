@@ -16,13 +16,15 @@ describe('MastodonCustomProvider', () => {
   let fetchMock: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
-    process.env.FRONTEND_URL = 'https://postiz.example.com';
+    vi.stubEnv('FRONTEND_URL', 'https://postiz.example.com');
+    vi.stubEnv('DISABLE_SSRF_PROTECTION', '');
     fetchMock = vi.fn();
     vi.stubGlobal('fetch', fetchMock);
   });
 
   afterEach(() => {
     vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
   });
 
   describe('externalUrl', () => {
@@ -77,6 +79,31 @@ describe('MastodonCustomProvider', () => {
         expect(fetchMock).not.toHaveBeenCalled();
       }
     );
+
+    it('accepts an instance on a private network when SSRF protection is disabled', async () => {
+      vi.stubEnv('DISABLE_SSRF_PROTECTION', 'true');
+      fetchMock.mockResolvedValueOnce(
+        jsonResponse({ client_id: 'cid', client_secret: 'csecret' })
+      );
+
+      const result = await new MastodonCustomProvider().externalUrl(
+        'http://mastodon:3000/'
+      );
+
+      expect(result.instanceUrl).toBe('http://mastodon:3000');
+    });
+
+    it('fails with a clear message when the instance answers an error page', async () => {
+      fetchMock.mockResolvedValueOnce(
+        new Response('<html>Bad gateway</html>', { status: 502 })
+      );
+
+      await expect(
+        new MastodonCustomProvider().externalUrl(
+          'https://mastodon.gamedev.place'
+        )
+      ).rejects.toThrow('Could not register Postiz on this Mastodon instance');
+    });
 
     it('fails when the instance does not return app credentials', async () => {
       fetchMock.mockResolvedValueOnce(
@@ -153,7 +180,7 @@ describe('MastodonCustomProvider', () => {
 
   describe('postPending', () => {
     it('publishes to the instance stored on the channel', async () => {
-      process.env.JWT_SECRET = 'test-secret';
+      vi.stubEnv('JWT_SECRET', 'test-secret');
       const integration = {
         customInstanceDetails: AuthService.fixedEncryption(
           JSON.stringify(client)
@@ -173,10 +200,14 @@ describe('MastodonCustomProvider', () => {
 });
 
 describe('MastodonProvider (default instance)', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
   it('keeps using MASTODON_URL and the mastodon callback', async () => {
-    process.env.FRONTEND_URL = 'https://postiz.example.com';
-    process.env.MASTODON_URL = 'https://mastodon.social';
-    process.env.MASTODON_CLIENT_ID = 'env-client';
+    vi.stubEnv('FRONTEND_URL', 'https://postiz.example.com');
+    vi.stubEnv('MASTODON_URL', 'https://mastodon.social');
+    vi.stubEnv('MASTODON_CLIENT_ID', 'env-client');
 
     const { url } = await new MastodonProvider().generateAuthUrl();
 
