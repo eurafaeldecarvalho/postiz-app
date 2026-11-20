@@ -96,7 +96,9 @@ export class MastodonProvider extends SocialAbstract implements SocialProvider {
     state: string,
     clientId: string
   ) {
-    return `${customUrl}/oauth/authorize?client_id=${clientId}&response_type=code&redirect_uri=${encodeURIComponent(
+    return `${customUrl}/oauth/authorize?client_id=${encodeURIComponent(
+      clientId
+    )}&response_type=code&redirect_uri=${encodeURIComponent(
       this.redirectUri()
     )}&scope=${this.scopes.join('+')}&state=${state}`;
   }

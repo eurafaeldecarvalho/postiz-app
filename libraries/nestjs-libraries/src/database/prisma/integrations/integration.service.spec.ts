@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { IntegrationService } from '@gitroom/nestjs-libraries/database/prisma/integrations/integration.service';
 import { AuthService } from '@gitroom/helpers/auth/auth.service';
 
@@ -14,8 +14,12 @@ const serviceWith = (integration: any) =>
   );
 
 describe('IntegrationService.getConnectedInstanceUrl', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
   it('returns the instance a channel of an external provider was connected to', async () => {
-    process.env.JWT_SECRET = 'test-secret';
+    vi.stubEnv('JWT_SECRET', 'test-secret');
     const service = serviceWith({
       customInstanceDetails: AuthService.fixedEncryption(
         JSON.stringify({
