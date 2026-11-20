@@ -241,7 +241,11 @@ export interface SocialProvider
   scopes: string[];
   externalUrl?: (
     url: string
-  ) => Promise<{ client_id: string; client_secret: string }>;
+  ) => Promise<{
+    client_id: string;
+    client_secret: string;
+    instanceUrl?: string;
+  }>;
   mention?: (
     token: string,
     data: { query: string },

@@ -29,6 +29,7 @@ import { AutopostRepository } from '@gitroom/nestjs-libraries/database/prisma/au
 import { RefreshIntegrationService } from '@gitroom/nestjs-libraries/integrations/refresh.integration.service';
 import { TemporalService } from 'nestjs-temporal-core';
 import { randomBytes } from 'crypto';
+import { AuthService } from '@gitroom/helpers/auth/auth.service';
 import { ApplicationFailure } from '@temporalio/common';
 import {
   EncryptionService,
@@ -210,6 +211,30 @@ export class IntegrationService {
       org,
       internalId
     );
+  }
+
+  // Providers with an external url (a self-hosted instance) store it
+  // encrypted on the channel when it connects, so a reconnect can go back to
+  // the same instance without asking for it again.
+  async getConnectedInstanceUrl(
+    org: string,
+    internalId: string
+  ): Promise<string | undefined> {
+    const integration =
+      await this._integrationRepository.getIntegrationByInternalId(
+        org,
+        internalId
+      );
+
+    try {
+      return (
+        JSON.parse(
+          AuthService.fixedDecryption(integration?.customInstanceDetails || '')
+        ).instanceUrl || undefined
+      );
+    } catch (err) {
+      return undefined;
+    }
   }
 
   async refreshToken(provider: SocialProvider, refresh: string) {
