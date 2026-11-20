@@ -244,15 +244,27 @@ export class IntegrationsController {
       migrateTo || integration
     );
 
-    if (integrationProvider.externalUrl && !externalUrl) {
+    // Reconnecting a channel of a provider with an external url goes back to
+    // the instance the channel was connected to.
+    const instanceUrl =
+      externalUrl ||
+      (integrationProvider.externalUrl && refresh
+        ? await this._integrationService.getConnectedInstanceUrl(
+            org.id,
+            refresh
+          )
+        : undefined);
+
+    if (integrationProvider.externalUrl && !instanceUrl) {
       throw new Error('Missing external url');
     }
 
     try {
       const getExternalUrl = integrationProvider.externalUrl
         ? {
-            ...(await integrationProvider.externalUrl(externalUrl)),
-            instanceUrl: externalUrl,
+            instanceUrl: instanceUrl!,
+            // the provider may return a normalized instanceUrl
+            ...(await integrationProvider.externalUrl(instanceUrl!)),
           }
         : undefined;
 

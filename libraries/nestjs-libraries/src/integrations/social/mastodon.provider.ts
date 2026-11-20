@@ -85,14 +85,19 @@ export class MastodonProvider extends SocialAbstract implements SocialProvider {
       username: '',
     };
   }
+  // The callback route is the provider identifier, so a provider extending
+  // this one gets its own callback (and its own token exchange).
+  protected redirectUri() {
+    return `${process.env.FRONTEND_URL}/integrations/social/${this.identifier}`;
+  }
+
   protected generateUrlDynamic(
     customUrl: string,
     state: string,
-    clientId: string,
-    url: string
+    clientId: string
   ) {
     return `${customUrl}/oauth/authorize?client_id=${clientId}&response_type=code&redirect_uri=${encodeURIComponent(
-      `${url}/integrations/social/mastodon`
+      this.redirectUri()
     )}&scope=${this.scopes.join('+')}&state=${state}`;
   }
 
@@ -101,8 +106,7 @@ export class MastodonProvider extends SocialAbstract implements SocialProvider {
     const url = this.generateUrlDynamic(
       process.env.MASTODON_URL || 'https://mastodon.social',
       state,
-      process.env.MASTODON_CLIENT_ID!,
-      process.env.FRONTEND_URL!
+      process.env.MASTODON_CLIENT_ID!
     );
     return {
       url,
@@ -122,10 +126,7 @@ export class MastodonProvider extends SocialAbstract implements SocialProvider {
     form.append('client_secret', clientSecret);
     form.append('code', code);
     form.append('grant_type', 'authorization_code');
-    form.append(
-      'redirect_uri',
-      `${process.env.FRONTEND_URL}/integrations/social/mastodon`
-    );
+    form.append('redirect_uri', this.redirectUri());
     form.append('scope', this.scopes.join(' '));
 
     const tokenInformation = await (

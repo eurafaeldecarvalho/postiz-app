@@ -11,21 +11,38 @@ import { Integration } from '@prisma/client';
 
 export class MastodonCustomProvider extends MastodonProvider {
   override identifier = 'mastodon-custom';
-  override name = 'M. Instance';
+  override name = 'Mastodon\n(Custom Instance)';
+  toolTip =
+    'Connect an account from any Mastodon server, you will be asked for its address';
   override maxConcurrentJob = 5; // Custom Mastodon instances typically have generous limits
   editor = 'normal' as const;
 
+  // Accepts what users type ("mastodon.gamedev.place", a profile link...) and
+  // keeps only the https origin of the instance.
+  private normalizeInstanceUrl(url: string) {
+    const value = (url || '').trim();
+    const parsed = new URL(
+      /^[a-z]+:\/\//i.test(value) ? value : `https://${value}`
+    );
+    if (parsed.protocol !== 'https:' || !parsed.hostname.includes('.')) {
+      throw new Error('The instance url must be a public https url');
+    }
+
+    return parsed.origin;
+  }
+
+  // Registers a Postiz app on the user's instance (every Mastodon server has
+  // its own OAuth apps). The returned credentials are stored encrypted on the
+  // channel, together with the instance url.
   async externalUrl(url: string) {
+    const instanceUrl = this.normalizeInstanceUrl(url);
     const form = new FormData();
     form.append('client_name', 'Postiz');
-    form.append(
-      'redirect_uris',
-      `${process.env.FRONTEND_URL}/integrations/social/mastodon`
-    );
+    form.append('redirect_uris', this.redirectUri());
     form.append('scopes', this.scopes.join(' '));
     form.append('website', process.env.FRONTEND_URL!);
-    const { client_id, client_secret, ...all } = await (
-      await fetch(url + '/api/v1/apps', {
+    const { client_id, client_secret } = await (
+      await fetch(instanceUrl + '/api/v1/apps', {
         method: 'POST',
         body: form,
         // @ts-ignore - undici-only option; blocks SSRF to internal IPs
@@ -33,22 +50,22 @@ export class MastodonCustomProvider extends MastodonProvider {
       })
     ).json();
 
+    if (!client_id || !client_secret) {
+      throw new Error('Could not register Postiz on this Mastodon instance');
+    }
+
     return {
       client_id,
       client_secret,
+      instanceUrl,
     };
   }
-  override async generateAuthUrl(
-    refresh?: string,
-    external?: ClientInformation
-  ) {
+  override async generateAuthUrl(external?: ClientInformation) {
     const state = makeSecureId(6);
     const url = this.generateUrlDynamic(
       external?.instanceUrl!,
       state,
-      external?.client_id!,
-      process.env.FRONTEND_URL!,
-      refresh
+      external?.client_id!
     );
 
     return {
