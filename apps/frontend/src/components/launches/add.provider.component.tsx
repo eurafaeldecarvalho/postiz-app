@@ -108,9 +108,10 @@ export const AddProviderButton: FC<{
 };
 
 export const UrlModal: FC<{
-  gotoUrl(url: string): void;
+  gotoUrl(url?: string): void;
+  optional?: boolean;
 }> = (props) => {
-  const { gotoUrl } = props;
+  const { gotoUrl, optional } = props;
   const methods = useForm({
     mode: 'onChange',
   });
@@ -118,7 +119,8 @@ export const UrlModal: FC<{
   const t = useT();
 
   const submit = useCallback(async (data: FieldValues) => {
-    gotoUrl(data.url);
+    // an optional instance can be left empty: the default instance is used
+    gotoUrl(data.url?.trim() || undefined);
   }, []);
   return (
     <div className="rounded-[4px] border border-customColor6 bg-sixth px-[16px] pb-[16px] relative">
@@ -149,7 +151,18 @@ export const UrlModal: FC<{
           onSubmit={methods.handleSubmit(submit)}
         >
           <div className="pt-[10px]">
-            <Input label="URL" name="url" />
+            <Input
+              label="URL"
+              name="url"
+              {...(optional
+                ? {
+                    placeholder: t(
+                      'instance_url_optional_placeholder',
+                      'Leave empty to use the default instance'
+                    ),
+                  }
+                : {})}
+            />
           </div>
           <div>
             <Button type="submit">{t('connect', 'Connect')}</Button>
@@ -488,6 +501,7 @@ export const AddProviderComponent: FC<{
     name: string;
     toolTip?: string;
     isExternal: boolean;
+    isExternalOptional?: boolean;
     isWeb3: boolean;
     isChromeExtension?: boolean;
     extensionCookies?: Array<{
@@ -531,7 +545,8 @@ export const AddProviderComponent: FC<{
           defaultValue?: string;
           type: 'text' | 'password';
           hint?: string;
-        }>
+        }>,
+        isExternalOptional?: boolean
       ) =>
       async () => {
         const onboardingParam = onboarding ? 'onboarding=true' : '';
@@ -578,7 +593,7 @@ export const AddProviderComponent: FC<{
           // back to the iOS/Android app after OAuth completes, instead
           // of the default web redirect.
           const params = [
-            `externalUrl=${encodeURIComponent(externalUrl)}`,
+            externalUrl ? `externalUrl=${encodeURIComponent(externalUrl)}` : '',
             onboardingParam,
             isMobile
               ? `redirectUrl=${encodeURIComponent('postiz://integrations')}`
@@ -669,7 +684,12 @@ export const AddProviderComponent: FC<{
             classNames: {
               modal: 'bg-transparent text-textColor',
             },
-            children: <UrlModal gotoUrl={gotoIntegration} />,
+            children: (
+              <UrlModal
+                gotoUrl={gotoIntegration}
+                optional={isExternalOptional}
+              />
+            ),
           });
           return;
         }
@@ -721,7 +741,7 @@ export const AddProviderComponent: FC<{
               }
 
               return (
-                !item.isExternal &&
+                (!item.isExternal || item.isExternalOptional) &&
                 !item.isWeb3 &&
                 !item.isChromeExtension &&
                 !item.customFields
@@ -736,7 +756,8 @@ export const AddProviderComponent: FC<{
                   item.isExternal,
                   item.isWeb3,
                   item.isChromeExtension,
-                  item.customFields
+                  item.customFields,
+                  item.isExternalOptional
                 )}
                 {...(!!item.toolTip
                   ? {

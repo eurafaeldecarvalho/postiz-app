@@ -75,7 +75,6 @@ export const socialIntegrationList: Array<SocialAbstract & SocialProvider> = [
   new SkoolProvider(),
   new MeweProvider(),
   new TumblrProvider(),
-  // new MastodonCustomProvider(),
 ];
 
 @Injectable()
@@ -136,6 +135,7 @@ export class IntegrationManager {
             toolTip: p.toolTip,
             editor: p.editor,
             isExternal: !!p.externalUrl,
+            isExternalOptional: !!p.externalUrlOptional,
             isWeb3: !!p.isWeb3,
             isChromeExtension: !!p.isChromeExtension,
             ...(p.extensionCookies
@@ -251,7 +251,7 @@ export class IntegrationManager {
       .filter(
         (p) =>
           !this.isHiddenProvider(p.identifier) &&
-          !p.externalUrl &&
+          (!p.externalUrl || !!p.externalUrlOptional) &&
           !p.customFields &&
           !p.isWeb3 &&
           !p.isChromeExtension

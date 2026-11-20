@@ -1,5 +1,6 @@
 import {
   AuthTokenDetails,
+  ClientInformation,
   PendingCheckResponse,
   PostDetails,
   PostResponse,
@@ -19,6 +20,51 @@ import { Integration } from '@prisma/client';
 import { number, string } from 'yup';
 import FormDataUpload from 'form-data';
 import { PassThrough, Readable } from 'stream';
+import { AuthService } from '@gitroom/helpers/auth/auth.service';
+
+export const DEFAULT_MASTODON_URL = 'https://mastodon.social';
+
+// Turns what a user types for a Mastodon server ("mastodon.social",
+// "https://mastodon.social/", a profile link...) into the origin of the
+// instance: https, lowercase host, no path and no trailing slash. Plain http is
+// upgraded to https, and only kept when SSRF protection is disabled (a
+// self-hosted instance on a private network).
+export const normalizeMastodonInstanceUrl = (url: string) => {
+  const value = (url || '').trim();
+  if (!value) {
+    throw new Error('Missing Mastodon instance url');
+  }
+
+  let parsed: URL;
+  try {
+    parsed = new URL(
+      /^[a-z][a-z0-9+.-]*:\/\//i.test(value) ? value : `https://${value}`
+    );
+  } catch (err) {
+    throw new Error('Invalid Mastodon instance url');
+  }
+
+  const privateNetwork = process.env.DISABLE_SSRF_PROTECTION === 'true';
+  if (!['https:', 'http:'].includes(parsed.protocol)) {
+    throw new Error('The Mastodon instance url must be an https url');
+  }
+
+  if (parsed.protocol === 'http:' && !privateNetwork) {
+    parsed.protocol = 'https:';
+  }
+
+  // a public instance always has a domain name ("localhost" or a bare
+  // container name are only reachable on a private network)
+  if (
+    parsed.username ||
+    parsed.password ||
+    (!privateNetwork && !parsed.hostname.includes('.'))
+  ) {
+    throw new Error('Invalid Mastodon instance url');
+  }
+
+  return parsed.origin;
+};
 
 // Travels through the workflow history between postPending, checkPostStatus
 // and finalizePost - keep it small JSON (the instance url, media ids and the
@@ -38,8 +84,83 @@ export class MastodonProvider extends SocialAbstract implements SocialProvider {
   isBetweenSteps = false;
   scopes = ['write:statuses', 'profile', 'write:media'];
   editor = 'normal' as const;
+  // The add channel screen asks for the instance, empty means MASTODON_URL
+  externalUrlOptional = true;
   maxLength() {
     return 500;
+  }
+
+  // MASTODON_URL, the instance of the app configured in the environment
+  protected defaultInstanceUrl() {
+    return (process.env.MASTODON_URL || DEFAULT_MASTODON_URL)
+      .trim()
+      .replace(/\/+$/, '');
+  }
+
+  resolveExternalUrl(url?: string) {
+    const defaultUrl = this.defaultInstanceUrl();
+    const instanceUrl = url?.trim()
+      ? normalizeMastodonInstanceUrl(url)
+      : defaultUrl;
+
+    // The default instance keeps using the app from MASTODON_CLIENT_ID /
+    // MASTODON_CLIENT_SECRET; without one, an app is registered there too.
+    const defaultApp =
+      instanceUrl.toLowerCase() === defaultUrl.toLowerCase() &&
+      !!process.env.MASTODON_CLIENT_ID &&
+      !!process.env.MASTODON_CLIENT_SECRET;
+
+    return { instanceUrl, defaultApp };
+  }
+
+  externalRedirectUri() {
+    return `${process.env.FRONTEND_URL}/integrations/social/${this.identifier}`;
+  }
+
+  // Registers a Postiz app on a Mastodon instance (every server has its own
+  // OAuth apps), with the same callback and scopes as the default app.
+  async externalUrl(instanceUrl: string) {
+    const form = new FormData();
+    form.append('client_name', 'Postiz');
+    form.append('redirect_uris', this.externalRedirectUri());
+    form.append('scopes', this.scopes.join(' '));
+    form.append('website', process.env.FRONTEND_URL!);
+
+    const response = await fetch(`${instanceUrl}/api/v1/apps`, {
+      method: 'POST',
+      body: form,
+      // @ts-ignore - undici-only option; blocks SSRF to internal IPs
+      dispatcher: getSsrfSafeDispatcher(),
+    });
+
+    const { client_id, client_secret } = await response
+      .json()
+      .catch(() => ({} as { client_id?: string; client_secret?: string }));
+
+    if (!response.ok || !client_id || !client_secret) {
+      throw new Error('Could not register Postiz on this Mastodon instance');
+    }
+
+    return { client_id, client_secret };
+  }
+
+  // The instance of a channel, stored (encrypted) when it connected. Channels
+  // connected before that, or to the default instance, use MASTODON_URL.
+  protected channelInstanceUrl(
+    integration?: Pick<Integration, 'customInstanceDetails'>
+  ) {
+    if (!integration?.customInstanceDetails) {
+      return this.defaultInstanceUrl();
+    }
+
+    try {
+      const { instanceUrl } = JSON.parse(
+        AuthService.fixedDecryption(integration.customInstanceDetails)
+      );
+      return instanceUrl || this.defaultInstanceUrl();
+    } catch (err) {
+      return this.defaultInstanceUrl();
+    }
   }
 
   override handleErrors(
@@ -91,17 +212,21 @@ export class MastodonProvider extends SocialAbstract implements SocialProvider {
     clientId: string,
     url: string
   ) {
-    return `${customUrl}/oauth/authorize?client_id=${clientId}&response_type=code&redirect_uri=${encodeURIComponent(
+    return `${customUrl}/oauth/authorize?client_id=${encodeURIComponent(
+      clientId
+    )}&response_type=code&redirect_uri=${encodeURIComponent(
       `${url}/integrations/social/mastodon`
     )}&scope=${this.scopes.join('+')}&state=${state}`;
   }
 
-  async generateAuthUrl() {
+  // Without client information: the default instance and its app from the
+  // environment. With it: the app Postiz registered on the chosen instance.
+  async generateAuthUrl(clientInformation?: ClientInformation) {
     const state = makeSecureId(6);
     const url = this.generateUrlDynamic(
-      process.env.MASTODON_URL || 'https://mastodon.social',
+      clientInformation?.instanceUrl || this.defaultInstanceUrl(),
       state,
-      process.env.MASTODON_CLIENT_ID!,
+      clientInformation?.client_id || process.env.MASTODON_CLIENT_ID!,
       process.env.FRONTEND_URL!
     );
     return {
@@ -154,15 +279,27 @@ export class MastodonProvider extends SocialAbstract implements SocialProvider {
     };
   }
 
-  async authenticate(params: {
-    code: string;
-    codeVerifier: string;
-    refresh?: string;
-  }) {
+  async authenticate(
+    params: {
+      code: string;
+      codeVerifier: string;
+      refresh?: string;
+    },
+    clientInformation?: ClientInformation
+  ) {
+    if (clientInformation?.instanceUrl) {
+      return this.dynamicAuthenticate(
+        clientInformation.client_id,
+        clientInformation.client_secret,
+        clientInformation.instanceUrl,
+        params.code
+      );
+    }
+
     return this.dynamicAuthenticate(
       process.env.MASTODON_CLIENT_ID!,
       process.env.MASTODON_CLIENT_SECRET!,
-      process.env.MASTODON_URL || 'https://mastodon.social',
+      this.defaultInstanceUrl(),
       params.code
     );
   }
@@ -527,7 +664,7 @@ export class MastodonProvider extends SocialAbstract implements SocialProvider {
     return this.dynamicPost(
       id,
       accessToken,
-      process.env.MASTODON_URL || 'https://mastodon.social',
+      this.channelInstanceUrl(integration),
       postDetails
     );
   }
@@ -541,7 +678,7 @@ export class MastodonProvider extends SocialAbstract implements SocialProvider {
     return this.dynamicPostPending(
       id,
       accessToken,
-      process.env.MASTODON_URL || 'https://mastodon.social',
+      this.channelInstanceUrl(integration),
       postDetails
     );
   }
@@ -559,7 +696,7 @@ export class MastodonProvider extends SocialAbstract implements SocialProvider {
       postId,
       lastCommentId,
       accessToken,
-      process.env.MASTODON_URL || 'https://mastodon.social',
+      this.channelInstanceUrl(integration),
       postDetails
     );
   }

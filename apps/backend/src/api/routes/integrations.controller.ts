@@ -11,6 +11,7 @@ import {
 import { ioRedis } from '@gitroom/nestjs-libraries/redis/redis.service';
 import { IntegrationManager } from '@gitroom/nestjs-libraries/integrations/integration.manager';
 import { IntegrationService } from '@gitroom/nestjs-libraries/database/prisma/integrations/integration.service';
+import { IntegrationInstanceAppService } from '@gitroom/nestjs-libraries/database/prisma/integrations/integration.instance.app.service';
 import { GetOrgFromRequest } from '@gitroom/nestjs-libraries/user/org.from.request';
 import { Organization, User } from '@prisma/client';
 import { IntegrationFunctionDto } from '@gitroom/nestjs-libraries/dtos/integrations/integration.function.dto';
@@ -45,7 +46,8 @@ export class IntegrationsController {
     private _integrationManager: IntegrationManager,
     private _integrationService: IntegrationService,
     private _postService: PostsService,
-    private _refreshIntegrationService: RefreshIntegrationService
+    private _refreshIntegrationService: RefreshIntegrationService,
+    private _instanceAppService: IntegrationInstanceAppService
   ) {}
 
   @Post('/provider/:id/connect')
@@ -244,17 +246,34 @@ export class IntegrationsController {
       migrateTo || integration
     );
 
-    if (integrationProvider.externalUrl && !externalUrl) {
+    // A reconnect goes back to the instance the channel was connected to
+    const typedUrl =
+      externalUrl && externalUrl !== 'undefined' ? externalUrl.trim() : '';
+    const instanceUrl =
+      typedUrl ||
+      (integrationProvider.externalUrl && refresh
+        ? await this._integrationService.getConnectedInstanceUrl(
+            org.id,
+            refresh
+          )
+        : undefined);
+
+    if (
+      integrationProvider.externalUrl &&
+      !instanceUrl &&
+      !integrationProvider.externalUrlOptional
+    ) {
       throw new Error('Missing external url');
     }
 
     try {
-      const getExternalUrl = integrationProvider.externalUrl
-        ? {
-            ...(await integrationProvider.externalUrl(externalUrl)),
-            instanceUrl: externalUrl,
-          }
-        : undefined;
+      // The app registered on the instance (created on the first connection
+      // and reused after). Undefined when the provider uses its default app.
+      const getExternalUrl =
+        await this._instanceAppService.getClientInformation(
+          integrationProvider,
+          instanceUrl
+        );
 
       const { codeVerifier, state, url } =
         await integrationProvider.generateAuthUrl(getExternalUrl);
@@ -273,12 +292,16 @@ export class IntegrationsController {
 
       await ioRedis.set(`organization:${state}`, org.id, 'EX', 3600);
       await ioRedis.set(`login:${state}`, codeVerifier, 'EX', 3600);
-      await ioRedis.set(
-        `external:${state}`,
-        JSON.stringify(getExternalUrl),
-        'EX',
-        3600
-      );
+      // Only the instance travels to the callback, the app credentials are
+      // read again from the database there
+      if (getExternalUrl) {
+        await ioRedis.set(
+          `external:${state}`,
+          JSON.stringify({ instanceUrl: getExternalUrl.instanceUrl }),
+          'EX',
+          3600
+        );
+      }
 
       return { url };
     } catch (err) {

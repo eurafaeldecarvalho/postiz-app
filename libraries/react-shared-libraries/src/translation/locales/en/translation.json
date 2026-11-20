@@ -655,6 +655,7 @@
   "password_reset_link_expired": "Your password reset link has expired. Please try again.",
   "invalid_api_key": "Invalid API key",
   "could_not_connect_to_platform": "Could not connect to the platform",
+  "instance_url_optional_placeholder": "Leave empty to use the default instance",
   "web3_provider": "Web3 provider",
   "add_provider_title": "Add Provider",
   "profile_updated": "Profile updated",

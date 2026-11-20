@@ -17,7 +17,10 @@ import { CheckPolicies } from '@gitroom/backend/services/auth/permissions/permis
 import { ApiTags } from '@nestjs/swagger';
 import { NotEnoughScopesFilter } from '@gitroom/nestjs-libraries/integrations/integration.missing.scopes';
 import { AuthService } from '@gitroom/helpers/auth/auth.service';
-import { AuthTokenDetails } from '@gitroom/nestjs-libraries/integrations/social/social.integrations.interface';
+import {
+  AuthTokenDetails,
+  ClientInformation,
+} from '@gitroom/nestjs-libraries/integrations/social/social.integrations.interface';
 import { NotEnoughScopes } from '@gitroom/nestjs-libraries/integrations/social.abstract';
 import {
   AuthorizationActions,
@@ -25,6 +28,7 @@ import {
 } from '@gitroom/backend/services/auth/permissions/permission.exception.class';
 import { RefreshIntegrationService } from '@gitroom/nestjs-libraries/integrations/refresh.integration.service';
 import { OrganizationService } from '@gitroom/nestjs-libraries/database/prisma/organizations/organization.service';
+import { IntegrationInstanceAppService } from '@gitroom/nestjs-libraries/database/prisma/integrations/integration.instance.app.service';
 import { getSsrfSafeDispatcher } from '@gitroom/nestjs-libraries/dtos/webhooks/ssrf.safe.dispatcher';
 import { ThrottlerRealIpGuard } from '@gitroom/nestjs-libraries/throttler/throttler.provider';
 import { PermissionsService } from '@gitroom/backend/services/auth/permissions/permissions.service';
@@ -37,7 +41,8 @@ export class NoAuthIntegrationsController {
     private _integrationService: IntegrationService,
     private _refreshIntegrationService: RefreshIntegrationService,
     private _organizationService: OrganizationService,
-    private _permissionsService: PermissionsService
+    private _permissionsService: PermissionsService,
+    private _instanceAppService: IntegrationInstanceAppService
   ) {}
 
   @Get('/')
@@ -93,6 +98,23 @@ export class NoAuthIntegrationsController {
       await ioRedis.del(`external:${body.state}`);
     }
 
+    // The instance the channel is connecting to and the app registered there.
+    // Only the instance url is kept on the channel, the app credentials stay
+    // in their own table.
+    const external: { instanceUrl?: string; client_secret?: string } = details
+      ? JSON.parse(details) || {}
+      : {};
+    const clientInformation =
+      external.instanceUrl && !external.client_secret
+        ? await this._instanceAppService.getClientInformation(
+            integrationProvider,
+            external.instanceUrl
+          )
+        : (external as ClientInformation | undefined);
+    const instanceDetails = external.instanceUrl
+      ? JSON.stringify({ instanceUrl: external.instanceUrl })
+      : undefined;
+
     const refresh = await ioRedis.get(`refresh:${body.state}`);
     if (refresh) {
       await ioRedis.del(`refresh:${body.state}`);
@@ -122,7 +144,7 @@ export class NoAuthIntegrationsController {
             codeVerifier: getCodeVerifier,
             refresh: body.refresh,
           },
-          details ? JSON.parse(details) : undefined
+          external.instanceUrl ? clientInformation : undefined
         );
 
         if (typeof auth === 'string') {
@@ -262,8 +284,8 @@ export class NoAuthIntegrationsController {
         refresh ? false : integrationProvider.isBetweenSteps,
         body.refresh,
         +body.timezone,
-        details
-          ? AuthService.fixedEncryption(details)
+        instanceDetails
+          ? AuthService.fixedEncryption(instanceDetails)
           : integrationProvider.customFields
           ? AuthService.fixedEncryption(
               Buffer.from(body.code, 'base64').toString()

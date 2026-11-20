@@ -234,9 +234,25 @@ export interface SocialProvider
   oneTimeToken?: boolean;
   isBetweenSteps: boolean;
   scopes: string[];
+  // Providers that run on many instances (Mastodon): registers a Postiz app on
+  // the instance at this url. The app is stored and reused, see
+  // IntegrationInstanceAppService.
   externalUrl?: (
     url: string
   ) => Promise<{ client_id: string; client_secret: string }>;
+  // The instance url can be left empty, the provider then connects to its
+  // default instance (the add channel screen shows the field as optional and
+  // the provider stays available in invite links and in the public API).
+  externalUrlOptional?: boolean;
+  // Turns what the user typed into the instance url (normalized and
+  // validated). `defaultApp` tells to connect with the app configured in the
+  // environment instead of an app registered on the instance.
+  resolveExternalUrl?: (url?: string) => {
+    instanceUrl: string;
+    defaultApp: boolean;
+  };
+  // The callback url of the apps registered on the instances
+  externalRedirectUri?: () => string;
   mention?: (
     token: string,
     data: { query: string },

@@ -369,7 +369,11 @@ export class PublicIntegrationsController {
       migrateTo || integration
     );
 
-    if (integrationProvider.externalUrl) {
+    // An optional instance url falls back to the default instance
+    if (
+      integrationProvider.externalUrl &&
+      !integrationProvider.externalUrlOptional
+    ) {
       throw new HttpException(
         {
           msg: 'This integration requires an external URL and is not supported via the public API',
